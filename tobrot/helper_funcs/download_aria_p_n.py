@@ -43,7 +43,7 @@ async def aria_start():
     aria2_daemon_start_cmd.append(f"--rpc-listen-port={ARIA_TWO_STARTED_PORT}")
     aria2_daemon_start_cmd.append("--rpc-max-request-size=1024M")
     aria2_daemon_start_cmd.append("--seed-ratio=1.0")
-    aria2_daemon_start_cmd.append("--seed-time=0.5")
+    aria2_daemon_start_cmd.append("--seed-time=1")
     aria2_daemon_start_cmd.append("--split=16")
     aria2_daemon_start_cmd.append(f"--bt-stop-timeout={MAX_TIME_TO_WAIT_FOR_TORRENTS_TO_START}")
     aria2_daemon_start_cmd.append("--uri-selector=adaptive")
@@ -81,9 +81,29 @@ def add_magnet(aria_instance, magnetic_link, c_file_name):
             options=options
         )
     except Exception as e:
-        return False, "**hata** \n" + str(e) + " \nyavaş linkler gönderme bana 💩 <code>/help</code> yazıp bi oku 😠"
+        return False, "**FAILED** \n" + str(e) + " \nPlease do not send SLOW links. Read /help"
     else:
         return True, "" + download.gid + ""
+
+
+def add_torrent(aria_instance, torrent_file_path):
+    if torrent_file_path is None:
+        return False, "**FAILED** \n" + str(e) + " \nsomething wrongings when trying to add <u>TORRENT</u> file"
+    if os.path.exists(torrent_file_path):
+        # Add Torrent Into Queue
+        try:
+            download = aria_instance.add_torrent(
+                torrent_file_path,
+                uris=None,
+                options=None,
+                position=None
+            )
+        except Exception as e:
+            return False, "**FAILED** \n" + str(e) + " \nPlease do not send SLOW links. Read /help"
+        else:
+            return True, "" + download.gid + ""
+    else:
+        return False, "**FAILED** \n" + str(e) + " \nPlease try other sources to get workable link"
 
 
 def add_url(aria_instance, text_url, c_file_name):
@@ -100,7 +120,7 @@ def add_url(aria_instance, text_url, c_file_name):
             options=options
         )
     except Exception as e:
-        return False, "**hata** \n" + str(e) + " \nyavaş linkler gönderme bana 💩 <code>/help</code> yazıp bi oku 😠"
+        return False, "**FAILED** \n" + str(e) + " \nPlease do not send SLOW links. Read /help"
     else:
         return True, "" + download.gid + ""
 
@@ -112,8 +132,10 @@ async def call_apropriate_function(
     sent_message_to_update_tg_p,
     is_zip
 ):
-    if incoming_link.startswith("magnet:"):
+    if incoming_link.lower().startswith("magnet:"):
         sagtus, err_message = add_magnet(aria_instance, incoming_link, c_file_name)
+    elif incoming_link.lower().endswith(".torrent"):
+        sagtus, err_message = add_torrent(aria_instance, incoming_link)
     else:
         sagtus, err_message = add_url(aria_instance, incoming_link, c_file_name)
     if not sagtus:
@@ -126,7 +148,7 @@ async def call_apropriate_function(
         sent_message_to_update_tg_p,
         None
     )
-    if incoming_link.startswith("magnet:") or incoming_link.lower().endswith(".torrent"):
+    if incoming_link.startswith("magnet:"):
         #
         err_message = await check_metadata(aria_instance, err_message)
         #
@@ -139,7 +161,7 @@ async def call_apropriate_function(
                 None
             )
         else:
-            return False, "metadatayı alamadım :( \n#durdu"
+            return False, "can't get metadata \n\n#stopped"
     await asyncio.sleep(1)
     file = aria_instance.get_download(err_message)
     to_upload_file = file.name
@@ -168,18 +190,18 @@ async def call_apropriate_function(
         message_id = final_response[key_f_res_se]
         channel_id = str(AUTH_CHANNEL)[4:]
         private_link = f"https://t.me/c/{channel_id}/{message_id}"
-        message_to_send += "💚 <a href='"
+        message_to_send += "👉 <a href='"
         message_to_send += private_link
         message_to_send += "'>"
         message_to_send += local_file_name
         message_to_send += "</a>"
         message_to_send += "\n"
     if message_to_send != "":
-        mention_req_user = f"<a href='tg://user?id={user_id}'>istediğin dosya/lar burda güzelim</a>\n\n"
+        mention_req_user = f"<a href='tg://user?id={user_id}'>Your Requested Files</a>\n\n"
         message_to_send = mention_req_user + message_to_send
-        message_to_send = message_to_send + "\n" + "#yüklendi"
+        message_to_send = message_to_send + "\n\n" + "#uploads"
     else:
-        message_to_send = "dosyanı yüklerken <i>hata</i> oluştu. tüh 😢"
+        message_to_send = "<i>FAILED</i> to upload files. 😞😞"
     await sent_message_to_update_tg_p.reply_to_message.reply_text(
         text=message_to_send,
         quote=True,
@@ -193,6 +215,7 @@ async def check_progress_for_dl(aria2, gid, event, previous_message):
     try:
         file = aria2.get_download(gid)
         complete = file.is_complete
+        is_file = file.seeder
         if not complete:
             if not file.error_message:
                 msg = ""
@@ -207,13 +230,19 @@ async def check_progress_for_dl(aria2, gid, event, previous_message):
                 except:
                     pass
                 #
-                msg = f"\nisim: `{downloading_dir_name}`"
-                msg += f"\nhız: `{file.download_speed_string()} 🔽 / {file.upload_speed_string()} 🔼`"
-                msg += f"\nbiten: `{file.progress_string()}`"
-                msg += f"\nboyut: `{file.total_length_string()}`"
-                # msg += f"\nbilgi: `{file.status}`"
-                msg += f"\ntahmini bitiş: `{file.eta_string()}`"
-                msg += f"\nvazgeç: <code>/iptal {gid}</code>"
+                msg = f"\nDownloading File: `{downloading_dir_name}`"
+                msg += f"\nSpeed: {file.download_speed_string()} 🔽 / {file.upload_speed_string()} 🔼"
+                msg += f"\nProgress: {file.progress_string()}"
+                msg += f"\nTotal Size: {file.total_length_string()}"
+
+                if is_file is None :
+                   msg += f"\n<b>Connections:</b> {file.connections}"
+                else :
+                   msg += f"\n<b>Info:</b>[ P : {file.connections} || S : {file.num_seeders} ]"
+
+                # msg += f"\nStatus: {file.status}"
+                msg += f"\nETA: {file.eta_string()}"
+                msg += f"\n<code>/cancel {gid}</code>"
                 # LOGGER.info(msg)
                 if msg != previous_message:
                     await event.edit(msg)
@@ -225,16 +254,16 @@ async def check_progress_for_dl(aria2, gid, event, previous_message):
             await asyncio.sleep(EDIT_SLEEP_TIME_OUT)
             await check_progress_for_dl(aria2, gid, event, previous_message)
         else:
-            await event.edit(f"🥰 şunu indirdim: `{file.name}`")
+            await event.edit(f"File Downloaded Successfully: `{file.name}`")
             return True
     except Exception as e:
         LOGGER.info(str(e))
         if " not found" in str(e) or "'file'" in str(e):
-            await event.edit("bir hain şu indirmeden vazgeçti:\n`{}`".format(file.name))
+            await event.edit("Download Canceled :\n`{}`".format(file.name))
             return False
         elif " depth exceeded" in str(e):
             file.remove(force=True)
-            await event.edit("indirmeden çıktım, sana da küstüm :( \n`{}`\ntorrent/link ölmüş beni suçlama".format(file.name))
+            await event.edit("Download Auto Canceled :\n`{}`\nYour Torrent/Link is Dead.".format(file.name))
             return False
         else:
             LOGGER.info(str(e))
